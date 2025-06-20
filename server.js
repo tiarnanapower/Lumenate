@@ -53,23 +53,25 @@ app.post('/webhook/bigcommerce', async (req, res) => {
       return res.status(200).send('No subscription detected');
     }
 
+  const txnsRes = await axios.get(
+    `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v2/orders/${orderId}/transactions`,
+    { headers: bcHeaders }
+  );
+  const transactions = txnsRes.data;
+  const stripeTransaction = transactions.find(txn => txn.gateway === 'stripe');
+  const transactionId = stripeTransaction?.gateway_transaction_id;
 
-    const charges = await stripe.charges.search({
-  query: `metadata['bigcommerce_customer_id']:'${customerId}'`,
-  limit: 1
-});
+  const charge = await stripe.charges.retrieve(transactionId);
+  const paymentMethodId = charge.payment_method;
+  console.log('Charge...');
+  
+  console.log(paymentMethodId);
 
+    if (!paymentMethodId && charge.payment_intent) {
+      const intent = await stripe.paymentIntents.retrieve(charge.payment_intent);
+      paymentMethodId = intent.payment_method;
+    }
 
-const charge = charges.data.find(charge =>
-  charge.receipt_email === customerEmail
-);
-console.log('CHARGE----');
-
-console.log(charge);
-
-
-const paymentMethodId = charge?.payment_method;
-console.log(paymentMethodId);
 
 
     const stripeCustomer = await stripe.customers.create({
