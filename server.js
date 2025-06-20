@@ -1,0 +1,139 @@
+require('dotenv').config();
+const express = require('express');
+const bodyParser = require('body-parser');
+const axios = require('axios');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+const app = express();
+app.use(bodyParser.json());
+
+const REVENUECAT_API = 'https://api.revenuecat.com/v2';
+const STRIPE_PRICE_ID = process.env.SUBSCRIPTION_PRICE_ID;
+
+// Receive BigCommerce order.created webhook
+app.post('/webhook/bigcommerce', async (req, res) => {
+  try {
+    const orderId = req.body.data.id;
+
+    // 🔐 Auth headers for BigCommerce API
+    const bcHeaders = {
+      'X-Auth-Token': process.env.BC_ACCESS_TOKEN,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    };
+
+    // 🔄 Fetch full order details
+    const orderRes = await axios.get(
+      `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v2/orders/${orderId}`,
+      { headers: bcHeaders }
+    );
+
+    const order = orderRes.data;
+    const customerEmail = order.billing_address.email;
+    const customerId = order.customer_id;
+    console.log(order);
+
+    // ✅ Check for subscription product
+    const productsRes = await axios.get(
+      `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v2/orders/${orderId}/products`,
+      { headers: bcHeaders }
+    );
+    console.log(productsRes);
+
+    const products = productsRes.data;
+
+    const isSubscription = products.some(p =>
+      (p.product_options || []).some(opt =>
+        opt.display_name.toLowerCase() === 'purchase type' &&
+        opt.display_value.toLowerCase() === 'subscription'
+      )
+    );
+
+    if (!isSubscription) {
+      return res.status(200).send('No subscription detected');
+    }
+
+
+    const charges = await stripe.charges.search({
+  query: `metadata['bigcommerce_customer_id']:'${customerId}'`,
+  limit: 1
+});
+
+
+const charge = charges.data.find(charge =>
+  charge.receipt_email === customerEmail
+);
+console.log('CHARGE----');
+
+console.log(charge);
+
+
+const paymentMethodId = charge?.payment_method;
+console.log(paymentMethodId);
+
+
+    const stripeCustomer = await stripe.customers.create({
+      email: customerEmail,
+      metadata: { bigcommerce_customer_id: customerId }
+    });
+
+    await stripe.subscriptions.create({
+      customer: stripeCustomer.id,
+      default_payment_method: paymentMethodId,
+      items: [{ price: STRIPE_PRICE_ID }],
+      metadata: { bigcommerce_customer_id: customerId }
+    });
+
+    await axios.post(`${REVENUECAT_API}/subscribers/${customerId}`, {
+      attributes: { email: customerEmail }
+    }, {
+      headers: { Authorization: `Bearer ${process.env.REVENUECAT_API_KEY}` }
+    });
+
+    console.log(`Subscription created for ${customerEmail}`);
+    res.status(200).send('Subscription created');
+
+  } catch (err) {
+    console.error('Error processing BigCommerce webhook:', err);
+    res.status(500).send('Error');
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
+
+// const axios = require('axios');
+// require('dotenv').config();
+
+// const createWebhook = async () => {
+//   const storeHash = process.env.BC_STORE_HASH;
+//   const token = process.env.BC_ACCESS_TOKEN;
+
+//   const webhookUrl = `https://api.bigcommerce.com/stores/${storeHash}/v3/hooks`;
+
+//   const data = {
+//     scope: 'store/order/created',
+//     destination: process.env.WEBHOOK_CALLBACK_URL,
+//     is_active: true,
+//     events_history_enabled: true
+//   };
+
+//   const headers = {
+//     'X-Auth-Token': token,
+//     'Content-Type': 'application/json',
+//     'Accept': 'application/json'
+//   };
+
+//   try {
+//     const response = await axios.post(webhookUrl, data, { headers });
+//     console.log('✅ Webhook created:', response.data);
+//   } catch (err) {
+//     console.error('❌ Error creating webhook:', err.response?.data || err.message);
+//   }
+// };
+
+// createWebhook();
