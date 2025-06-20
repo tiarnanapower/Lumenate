@@ -53,44 +53,48 @@ app.post('/webhook/bigcommerce', async (req, res) => {
       return res.status(200).send('No subscription detected');
     }
 
+    console.log(orderId)
   const txnsRes = await axios.get(
-    `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v2/orders/${orderId}/transactions`,
+    `https://api.bigcommerce.com/stores/${process.env.BC_STORE_HASH}/v3/orders/${orderId}/transactions`,
     { headers: bcHeaders }
   );
-  const transactions = txnsRes.data;
-  const stripeTransaction = transactions.find(txn => txn.gateway === 'stripe');
-  const transactionId = stripeTransaction?.gateway_transaction_id;
 
-  const charge = await stripe.charges.retrieve(transactionId);
-  const paymentMethodId = charge.payment_method;
-  console.log('Charge...');
+  const transactions = txnsRes.data.data;
+  const transactionId = transactions?.[0]?.gateway_transaction_id;
+
+  const intent = await stripe.paymentIntents.retrieve(transactionId);
+  const paymentMethodID = intent.payment_method;
   
-  console.log(paymentMethodId);
+    const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodID);
+    let customerIdToUse;
+    if (!paymentMethod.customer){
+      const stripeCustomer = await stripe.customers.create({
+        email: customerEmail,
+        metadata: { bigcommerce_customer_id: customerId }
+      });
 
-    if (!paymentMethodId && charge.payment_intent) {
-      const intent = await stripe.paymentIntents.retrieve(charge.payment_intent);
-      paymentMethodId = intent.payment_method;
+      await stripe.paymentMethods.attach(paymentMethodID, {
+        customer: stripeCustomer.id
+      })
+      customerIdToUse = stripeCustomer.id;
     }
-
-
-
-    const stripeCustomer = await stripe.customers.create({
-      email: customerEmail,
-      metadata: { bigcommerce_customer_id: customerId }
-    });
+    else{
+      customerIdToUse = paymentMethod.customer;
+    }
+    console.log(customerIdToUse);
 
     await stripe.subscriptions.create({
-      customer: stripeCustomer.id,
-      default_payment_method: paymentMethodId,
+      customer: customerIdToUse,
+      default_payment_method: paymentMethodID,
       items: [{ price: STRIPE_PRICE_ID }],
       metadata: { bigcommerce_customer_id: customerId }
     });
 
-    await axios.post(`${REVENUECAT_API}/subscribers/${customerId}`, {
-      attributes: { email: customerEmail }
-    }, {
-      headers: { Authorization: `Bearer ${process.env.REVENUECAT_API_KEY}` }
-    });
+    // await axios.post(`${REVENUECAT_API}/subscribers/${customerId}`, {
+    //   attributes: { email: customerEmail }
+    // }, {
+    //   headers: { Authorization: `Bearer ${process.env.REVENUECAT_API_KEY}` }
+    // });
 
     console.log(`Subscription created for ${customerEmail}`);
     res.status(200).send('Subscription created');
@@ -114,24 +118,22 @@ app.listen(PORT, () => {
 // const createWebhook = async () => {
 //   const storeHash = process.env.BC_STORE_HASH;
 //   const token = process.env.BC_ACCESS_TOKEN;
-
-//   const webhookUrl = `https://api.bigcommerce.com/stores/${storeHash}/v3/hooks`;
-
-//   const data = {
-//     scope: 'store/order/created',
-//     destination: process.env.WEBHOOK_CALLBACK_URL,
-//     is_active: true,
-//     events_history_enabled: true
-//   };
-
-//   const headers = {
-//     'X-Auth-Token': token,
-//     'Content-Type': 'application/json',
-//     'Accept': 'application/json'
-//   };
-
+//   const webhookID = process.env.BC_WEBHOOK_ID;
 //   try {
-//     const response = await axios.post(webhookUrl, data, { headers });
+//     const response = await axios.put(`https://api.bigcommerce.com/stores/${storeHash}/v3/hooks/${webhookID}`, 
+//       {
+//         scope: 'store/order/created',
+//         destination: process.env.WEBHOOK_CALLBACK_URL,
+//         is_active: true,
+//         events_history_enabled: true
+//       },{
+//         headers: {
+//           'X-Auth-Token': token,
+//           'Content-Type': 'application/json',
+//           'Accept': 'application/json'
+//         }
+//       }
+//       )
 //     console.log('✅ Webhook created:', response.data);
 //   } catch (err) {
 //     console.error('❌ Error creating webhook:', err.response?.data || err.message);
