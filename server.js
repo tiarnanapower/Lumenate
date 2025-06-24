@@ -81,7 +81,6 @@ app.post('/webhook/bigcommerce', async (req, res) => {
     else{
       customerIdToUse = paymentMethod.customer;
     }
-    console.log(customerIdToUse);
 
     await stripe.subscriptions.create({
       customer: customerIdToUse,
