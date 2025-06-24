@@ -45,7 +45,7 @@ app.post('/webhook/bigcommerce', async (req, res) => {
     const isSubscription = products.some(p =>
       (p.product_options || []).some(opt =>
         opt.display_name.toLowerCase() === 'purchase type' &&
-        opt.display_value.toLowerCase() === 'subscription'
+        opt.display_value.toLowerCase() === 'subscription - monthly'
       )
     );
 
